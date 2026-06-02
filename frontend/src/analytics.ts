@@ -263,5 +263,11 @@ export function analyticsUIText(languageCode?: string | null) {
 
 export function formatAnalyticsDay(value: string, languageCode?: string | null) {
   const code = normalizeLanguageCode(languageCode)
-  return new Intl.DateTimeFormat(code, { month: '2-digit', day: '2-digit' }).format(new Date(`${value}T00:00:00+08:00`))
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value)
+  if (match) {
+    const [, year, month, day] = match
+    const date = new Date(Date.UTC(Number(year), Number(month) - 1, Number(day)))
+    return new Intl.DateTimeFormat(code, { month: '2-digit', day: '2-digit', timeZone: 'UTC' }).format(date)
+  }
+  return value
 }
