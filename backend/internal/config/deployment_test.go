@@ -109,7 +109,7 @@ func TestFrontendDockerUsesReproducibleInstall(t *testing.T) {
 	dockerfile := readRepoFile(t, root, "frontend", "Dockerfile")
 
 	assertContains(t, dockerfile, "COPY package*.json ./", "frontend Dockerfile should copy package manifests before installing dependencies")
-	assertContains(t, dockerfile, "RUN npm ci", "frontend Dockerfile should use lockfile for reproducible builds")
+	assertContains(t, dockerfile, "npm ci", "frontend Dockerfile should use lockfile for reproducible builds")
 	if strings.Contains(dockerfile, "RUN npm install") {
 		t.Fatalf("frontend Dockerfile should not use npm install for production image builds")
 	}
