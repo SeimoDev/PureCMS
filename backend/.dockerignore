@@ -1,0 +1,8 @@
+.git
+tmp/
+.env
+.env.*
+*.log
+coverage/
+uploads/
+*.test
