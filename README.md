@@ -186,3 +186,7 @@ sh ops/quality-check.sh
 ## 运维
 
 PostgreSQL 与上传目录的生产备份/恢复脚本见 [docs/operations.md](docs/operations.md)。
+
+## 开源协议
+
+PureCMS 以 GNU General Public License v3.0 开源，详见 [LICENSE](LICENSE)。
