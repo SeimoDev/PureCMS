@@ -75,3 +75,21 @@ const tocHeadings = extractArticleHeadings('## 概览\n\n普通段落\n\n### **R
 assertIncludes(JSON.stringify(tocHeadings), '"id":"概览"', 'toc extracts h2 id')
 assertIncludes(JSON.stringify(tocHeadings), '"text":"React 与 Go"', 'toc strips inline markup')
 assertNotIncludes(JSON.stringify(tocHeadings), '代码里的标题', 'toc ignores fenced headings')
+const imageWithParentheses = markdownBlockToHtml('![cover](https://cdn.example.com/image%20(1).png)')
+assertIncludes(imageWithParentheses, '<img src="https://cdn.example.com/image%20(1).png"', 'image URL with parentheses')
+
+const mixedWithoutBlankLines = markdownToHtml('## Intro\nBody line\n- one\n- **two**\n> note\n![photo](https://cdn.example.com/photo%20(2).jpg)\nNext paragraph')
+assertIncludes(mixedWithoutBlankLines, '<h2 id="intro">Intro</h2>', 'heading without trailing blank line')
+assertIncludes(mixedWithoutBlankLines, '<p>Body line</p>', 'paragraph before list without blank line')
+assertIncludes(mixedWithoutBlankLines, '<ul><li>one</li><li><strong>two</strong></li></ul>', 'list after paragraph without blank line')
+assertIncludes(mixedWithoutBlankLines, '<blockquote><p>note</p></blockquote>', 'blockquote before image without blank line')
+assertIncludes(mixedWithoutBlankLines, '<img src="https://cdn.example.com/photo%20(2).jpg"', 'image after blockquote without blank line')
+assertIncludes(mixedWithoutBlankLines, '<p>Next paragraph</p>', 'paragraph after image without blank line')
+
+const singleItemLists = markdownToHtml('- only item\n\n1. only step')
+assertIncludes(singleItemLists, '<ul><li>only item</li></ul>', 'single unordered list item')
+assertIncludes(singleItemLists, '<ol><li>only step</li></ol>', 'single ordered list item')
+
+const tocWithoutBlankLines = extractArticleHeadings('## Intro\nBody\n### Details')
+assertIncludes(JSON.stringify(tocWithoutBlankLines), '"id":"intro"', 'toc sees heading before body without blank line')
+assertIncludes(JSON.stringify(tocWithoutBlankLines), '"id":"details"', 'toc sees heading after body without blank line')

@@ -29,12 +29,13 @@ function isSafeImageUrl(value: string) {
 
 function inlineMarkup(line: string) {
   return escapeHtml(line)
-    .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, label: string, href: string) => {
+    .replace(/\[([^\]]+)\]\(([^)\n]+)\)/g, (_, label: string, href: string) => {
       const normalizedHref = href.replace(/&amp;/g, '&')
       if (!isSafeLinkUrl(normalizedHref)) return label
       return `<a href="${escapeAttribute(normalizedHref)}" target="_blank" rel="noopener noreferrer">${label}</a>`
     })
     .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+    .replace(/~~(.*?)~~/g, '<del>$1</del>')
     .replace(/`([^`]+)`/g, '<code>$1</code>')
 }
 
@@ -55,14 +56,23 @@ function isTableSeparator(line: string) {
   return /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(line)
 }
 
-function headingFromBlock(block: string) {
+type MarkdownHeading = {
+  level: number
+  text: string
+}
+
+function headingFromBlock(block: string): MarkdownHeading | null {
   const trimmed = block.trim()
-  const match = trimmed.match(/^(#{1,3})\s+(.+)$/)
+  const match = trimmed.match(/^(#{1,6})\s+(.+)$/)
   if (!match || match[2].includes('\n')) return null
   return {
     level: match[1].length,
     text: match[2].trim(),
   }
+}
+
+function isTocHeading(heading: MarkdownHeading | null): heading is MarkdownHeading & { level: 1 | 2 | 3 } {
+  return heading !== null && heading.level >= 1 && heading.level <= 3
 }
 
 function plainInlineText(value: string) {
@@ -104,7 +114,7 @@ export function extractArticleHeadings(content: string): ArticleHeading[] {
   const counts = new Map<string, number>()
   return splitMarkdownBlocks(content)
     .map(headingFromBlock)
-    .filter((heading): heading is NonNullable<typeof heading> => Boolean(heading))
+    .filter(isTocHeading)
     .map((heading) => {
       const text = plainInlineText(heading.text)
       return {
@@ -115,49 +125,173 @@ export function extractArticleHeadings(content: string): ArticleHeading[] {
     })
 }
 
-export function splitMarkdownBlocks(content: string) {
+function isFenceLine(line: string) {
+  return line.trim().startsWith('```')
+}
+
+function isBlankLine(line: string) {
+  return line.trim() === ''
+}
+
+function isUnorderedListItem(line: string) {
+  return /^\s*[-*]\s+/.test(line)
+}
+
+function isOrderedListItem(line: string) {
+  return /^\s*\d+[.)]\s+/.test(line)
+}
+
+function isListItem(line: string) {
+  return isUnorderedListItem(line) || isOrderedListItem(line)
+}
+
+function isBlockquoteLine(line: string) {
+  return /^\s*>\s?/.test(line)
+}
+
+function isHeadingLine(line: string) {
+  return Boolean(headingFromBlock(line))
+}
+
+function isHorizontalRuleLine(line: string) {
+  return /^[-*_]{3,}$/.test(line.trim())
+}
+
+function normalizeMarkdownDestination(value: string) {
+  let target = value.trim()
+  if (target.startsWith('<') && target.endsWith('>')) {
+    target = target.slice(1, -1).trim()
+  }
+  const titleMatch = target.match(/^(\S+)\s+(['"]).*\2$/)
+  if (titleMatch) return titleMatch[1]
+  return target
+}
+
+function parseMarkdownImageBlock(block: string) {
+  const trimmed = block.trim()
+  if (!trimmed.startsWith('![') || !trimmed.endsWith(')')) return null
+  const labelEnd = trimmed.indexOf('](', 2)
+  if (labelEnd < 0) return null
+  const alt = trimmed.slice(2, labelEnd)
+  const src = normalizeMarkdownDestination(trimmed.slice(labelEnd + 2, -1))
+  if (!src) return null
+  return { alt, src }
+}
+
+function isImageLine(line: string) {
+  return Boolean(parseMarkdownImageBlock(line))
+}
+
+function startsTable(lines: string[], index: number) {
+  return index + 1 < lines.length && lines[index].includes('|') && isTableSeparator(lines[index + 1])
+}
+
+function startsSpecialBlock(lines: string[], index: number) {
+  const line = lines[index]
+  return (
+    isFenceLine(line) ||
+    startsTable(lines, index) ||
+    isBlockquoteLine(line) ||
+    isListItem(line) ||
+    isHeadingLine(line) ||
+    isHorizontalRuleLine(line) ||
+    isImageLine(line)
+  )
+}
+
+export function splitMarkdownBlocks(content: string): string[] {
   const blocks: string[] = []
-  const current: string[] = []
-  let inFence = false
+  const paragraph: string[] = []
+  const lines = content.split(/\r?\n/)
 
-  content.split(/\r?\n/).forEach((line) => {
-    if (line.trim().startsWith('```')) {
-      current.push(line)
-      if (inFence) {
-        blocks.push(current.join('\n'))
-        current.length = 0
-        inFence = false
-      } else {
-        inFence = true
+  function flushParagraph() {
+    if (paragraph.length === 0) return
+    blocks.push(paragraph.join('\n'))
+    paragraph.length = 0
+  }
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index]
+
+    if (isBlankLine(line)) {
+      flushParagraph()
+      continue
+    }
+
+    if (isFenceLine(line)) {
+      flushParagraph()
+      const fence = [line]
+      index += 1
+      while (index < lines.length) {
+        fence.push(lines[index])
+        if (isFenceLine(lines[index])) break
+        index += 1
       }
-      return
+      blocks.push(fence.join('\n'))
+      continue
     }
 
-    if (inFence) {
-      current.push(line)
-      return
-    }
-
-    if (line.trim() === '') {
-      if (current.length > 0) {
-        blocks.push(current.join('\n'))
-        current.length = 0
+    if (startsTable(lines, index)) {
+      flushParagraph()
+      const table = [line]
+      index += 1
+      while (index < lines.length && !isBlankLine(lines[index]) && lines[index].includes('|')) {
+        table.push(lines[index])
+        index += 1
       }
-      return
+      index -= 1
+      blocks.push(table.join('\n'))
+      continue
     }
 
-    current.push(line)
-  })
+    if (isBlockquoteLine(line)) {
+      flushParagraph()
+      const quote = [line]
+      index += 1
+      while (index < lines.length && (isBlockquoteLine(lines[index]) || isBlankLine(lines[index]))) {
+        quote.push(lines[index])
+        index += 1
+      }
+      index -= 1
+      blocks.push(quote.join('\n'))
+      continue
+    }
 
-  if (current.length > 0) blocks.push(current.join('\n'))
+    if (isListItem(line)) {
+      flushParagraph()
+      const ordered = isOrderedListItem(line)
+      const list = [line]
+      index += 1
+      while (index < lines.length && !isBlankLine(lines[index]) && (ordered ? isOrderedListItem(lines[index]) : isUnorderedListItem(lines[index]))) {
+        list.push(lines[index])
+        index += 1
+      }
+      index -= 1
+      blocks.push(list.join('\n'))
+      continue
+    }
+
+    if (isHeadingLine(line) || isHorizontalRuleLine(line) || isImageLine(line)) {
+      flushParagraph()
+      blocks.push(line)
+      continue
+    }
+
+    if (paragraph.length > 0 && startsSpecialBlock(lines, index)) {
+      flushParagraph()
+    }
+    paragraph.push(line)
+  }
+
+  flushParagraph()
   return blocks
 }
 
-export function markdownBlockToHtml(block: string) {
+export function markdownBlockToHtml(block: string): string {
   return markdownBlockToHtmlWithHeadingId(block)
 }
 
-function markdownBlockToHtmlWithHeadingId(block: string, headingId?: string) {
+function markdownBlockToHtmlWithHeadingId(block: string, headingId?: string): string {
   const trimmed = block.trim()
   const code = trimmed.match(/^```([a-zA-Z0-9_-]*)\n?([\s\S]*?)\n?```$/)
   if (code) {
@@ -165,21 +299,21 @@ function markdownBlockToHtmlWithHeadingId(block: string, headingId?: string) {
     return `<pre><code${language}>${escapeHtml(code[2])}</code></pre>`
   }
 
-  const image = trimmed.match(/^!\[([^\]]*)\]\(([^)\s]+)\)$/)
+  const image = parseMarkdownImageBlock(trimmed)
   if (image) {
-    const alt = inlineMarkup(image[1].trim())
-    const rawSrc = image[2].trim()
+    const alt = inlineMarkup(image.alt.trim())
+    const rawSrc = image.src.trim()
     if (!isSafeImageUrl(rawSrc)) return `<p>${inlineMarkup(trimmed)}</p>`
     const src = escapeAttribute(rawSrc)
     const caption = alt ? `<figcaption>${alt}</figcaption>` : ''
-    return `<figure><img src="${src}" alt="${escapeAttribute(image[1].trim())}" loading="lazy" />${caption}</figure>`
+    return `<figure><img src="${src}" alt="${escapeAttribute(image.alt.trim())}" loading="lazy" />${caption}</figure>`
   }
 
   const lines = block.split(/\r?\n/).map((line) => line.trimEnd())
-  if (lines.length > 1 && lines.every((line) => /^\s*[-*]\s+/.test(line))) {
+  if (lines.length > 0 && lines.every(isUnorderedListItem)) {
     return `<ul>${lines.map((line) => `<li>${inlineMarkup(listItemText(line))}</li>`).join('')}</ul>`
   }
-  if (lines.length > 1 && lines.every((line) => /^\s*\d+[.)]\s+/.test(line))) {
+  if (lines.length > 0 && lines.every(isOrderedListItem)) {
     return `<ol>${lines.map((line) => `<li>${inlineMarkup(listItemText(line))}</li>`).join('')}</ol>`
   }
   if (lines.length >= 3 && lines.every((line) => line.includes('|')) && isTableSeparator(lines[1])) {
@@ -196,13 +330,14 @@ function markdownBlockToHtmlWithHeadingId(block: string, headingId?: string) {
     return `<h${heading.level} id="${id}">${inlineMarkup(heading.text)}</h${heading.level}>`
   }
   if (/^[-*_]{3,}$/.test(trimmed)) return '<hr />'
-  if (lines.every((line) => line.startsWith('> '))) {
-    return `<blockquote>${lines.map((line) => inlineMarkup(line.slice(2))).join('<br />')}</blockquote>`
+  if (lines.every((line) => isBlockquoteLine(line) || isBlankLine(line))) {
+    const quoteContent = lines.map((line) => line.replace(/^\s*>\s?/, '')).join('\n').trim()
+    return `<blockquote>${quoteContent ? markdownToHtml(quoteContent) : ''}</blockquote>`
   }
   return `<p>${inlineMarkup(trimmed).replace(/\n/g, '<br />')}</p>`
 }
 
-export function markdownToHtml(content: string) {
+export function markdownToHtml(content: string): string {
   const headings = extractArticleHeadings(content)
   let headingIndex = 0
   return splitMarkdownBlocks(content)
