@@ -9,6 +9,123 @@ function escapeAttribute(value: string) {
   return escapeHtml(value).replace(/"/g, '&quot;')
 }
 
+const allowedHtmlTags = new Set([
+  'a',
+  'abbr',
+  'article',
+  'b',
+  'blockquote',
+  'br',
+  'cite',
+  'code',
+  'dd',
+  'del',
+  'details',
+  'div',
+  'dl',
+  'dt',
+  'em',
+  'figcaption',
+  'figure',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'i',
+  'img',
+  'kbd',
+  'li',
+  'mark',
+  'ol',
+  'p',
+  'pre',
+  's',
+  'section',
+  'small',
+  'span',
+  'strong',
+  'sub',
+  'summary',
+  'sup',
+  'table',
+  'tbody',
+  'td',
+  'th',
+  'thead',
+  'tr',
+  'u',
+  'ul',
+])
+
+const voidHtmlTags = new Set(['br', 'hr', 'img'])
+const blockHtmlTags = new Set([
+  'article',
+  'blockquote',
+  'details',
+  'div',
+  'dl',
+  'figure',
+  'h1',
+  'h2',
+  'h3',
+  'h4',
+  'h5',
+  'h6',
+  'hr',
+  'ol',
+  'p',
+  'pre',
+  'section',
+  'table',
+  'ul',
+])
+
+const allowedGlobalAttributes = new Set(['class', 'title'])
+const allowedAttributesByTag = new Map([
+  ['a', new Set(['href', 'title'])],
+  ['img', new Set(['src', 'alt', 'title', 'width', 'height'])],
+  ['th', new Set(['colspan', 'rowspan'])],
+  ['td', new Set(['colspan', 'rowspan'])],
+])
+
+const allowedStyleProperties = new Set([
+  'background',
+  'background-color',
+  'border',
+  'border-bottom',
+  'border-color',
+  'border-left',
+  'border-radius',
+  'border-right',
+  'border-style',
+  'border-top',
+  'border-width',
+  'color',
+  'display',
+  'font-size',
+  'font-style',
+  'font-weight',
+  'letter-spacing',
+  'line-height',
+  'margin',
+  'margin-bottom',
+  'margin-left',
+  'margin-right',
+  'margin-top',
+  'padding',
+  'padding-bottom',
+  'padding-left',
+  'padding-right',
+  'padding-top',
+  'text-align',
+  'text-decoration',
+  'vertical-align',
+  'white-space',
+])
+
 function urlScheme(value: string) {
   return value.trim().match(/^([a-z][a-z0-9+.-]*):/i)?.[1].toLowerCase()
 }
@@ -27,8 +144,86 @@ function isSafeImageUrl(value: string) {
   return !scheme || scheme === 'http' || scheme === 'https'
 }
 
+function isSafeCSSValue(value: string) {
+  const normalized = value.toLowerCase()
+  return !/[<>]/.test(value) && !normalized.includes('javascript:') && !normalized.includes('expression') && !normalized.includes('url(') && !normalized.includes('@import')
+}
+
+function sanitizeStyleAttribute(value: string) {
+  const declarations = value
+    .split(';')
+    .map((declaration) => declaration.trim())
+    .filter(Boolean)
+    .map((declaration) => {
+      const separator = declaration.indexOf(':')
+      if (separator <= 0) return ''
+      const property = declaration.slice(0, separator).trim().toLowerCase()
+      const cssValue = declaration.slice(separator + 1).trim()
+      if (!allowedStyleProperties.has(property) || !cssValue || !isSafeCSSValue(cssValue)) return ''
+      return `${property}: ${cssValue}`
+    })
+    .filter(Boolean)
+  return declarations.join('; ')
+}
+
+function sanitizeHTMLAttribute(tag: string, name: string, value: string) {
+  const normalized = name.toLowerCase()
+  if (normalized.startsWith('on')) return ''
+  if (normalized === 'style') {
+    const style = sanitizeStyleAttribute(value)
+    return style ? ` style="${escapeAttribute(style)}"` : ''
+  }
+  const tagAttributes = allowedAttributesByTag.get(tag)
+  if (!allowedGlobalAttributes.has(normalized) && !tagAttributes?.has(normalized)) return ''
+  if ((tag === 'a' && normalized === 'href' && !isSafeLinkUrl(value)) || (tag === 'img' && normalized === 'src' && !isSafeImageUrl(value))) {
+    return ''
+  }
+  if ((normalized === 'width' || normalized === 'height' || normalized === 'colspan' || normalized === 'rowspan') && !/^\d{1,4}$/.test(value.trim())) {
+    return ''
+  }
+  return ` ${normalized}="${escapeAttribute(value.trim())}"`
+}
+
+function sanitizeHTMLAttributes(tag: string, attributes: string) {
+  const out: string[] = []
+  const attributePattern = /([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("([^"]*)"|'([^']*)'|([^\s"'>/]+))/g
+  let match: RegExpExecArray | null
+  while ((match = attributePattern.exec(attributes))) {
+    const value = match[3] ?? match[4] ?? match[5] ?? ''
+    const sanitized = sanitizeHTMLAttribute(tag, match[1], value)
+    if (sanitized) out.push(sanitized)
+  }
+  if (tag === 'a') out.push(' target="_blank"', ' rel="noopener noreferrer"')
+  if (tag === 'img') out.push(' loading="lazy"')
+  return out.join('')
+}
+
+function sanitizeHTMLTag(raw: string) {
+  const tag = raw.match(/^<\s*(\/?)\s*([a-zA-Z][\w:-]*)([\s\S]*?)(\/?)\s*>$/)
+  if (!tag) return escapeHtml(raw)
+  const closing = tag[1] === '/'
+  const name = tag[2].toLowerCase()
+  const selfClosing = tag[4] === '/' || voidHtmlTags.has(name)
+  if (!allowedHtmlTags.has(name)) return escapeHtml(raw)
+  if (closing) return voidHtmlTags.has(name) ? '' : `</${name}>`
+  return `<${name}${sanitizeHTMLAttributes(name, tag[3])}${selfClosing ? ' />' : '>'}`
+}
+
+function escapeTextAndSanitizeHtml(value: string) {
+  let out = ''
+  let lastIndex = 0
+  const tagPattern = /<\/?[a-zA-Z][^<>]*>/g
+  let match: RegExpExecArray | null
+  while ((match = tagPattern.exec(value))) {
+    out += escapeHtml(value.slice(lastIndex, match.index))
+    out += sanitizeHTMLTag(match[0])
+    lastIndex = match.index + match[0].length
+  }
+  return out + escapeHtml(value.slice(lastIndex))
+}
+
 function inlineMarkup(line: string) {
-  return escapeHtml(line)
+  return escapeTextAndSanitizeHtml(line)
     .replace(/\[([^\]]+)\]\(([^)\n]+)\)/g, (_, label: string, href: string) => {
       const normalizedHref = href.replace(/&amp;/g, '&')
       if (!isSafeLinkUrl(normalizedHref)) return label
@@ -77,6 +272,7 @@ function isTocHeading(heading: MarkdownHeading | null): heading is MarkdownHeadi
 
 function plainInlineText(value: string) {
   return value
+    .replace(/<[^>]+>/g, '')
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
@@ -182,6 +378,16 @@ function isImageLine(line: string) {
   return Boolean(parseMarkdownImageBlock(line))
 }
 
+function rawHtmlBlockTagName(line: string) {
+  const match = line.trim().match(/^<\s*([a-zA-Z][\w:-]*)\b/)
+  const name = match?.[1].toLowerCase()
+  return name && allowedHtmlTags.has(name) && blockHtmlTags.has(name) ? name : null
+}
+
+function closesRawHtmlBlock(line: string, tag: string) {
+  return voidHtmlTags.has(tag) || new RegExp(`</\\s*${tag}\\s*>\\s*$`, 'i').test(line.trim())
+}
+
 function startsTable(lines: string[], index: number) {
   return index + 1 < lines.length && lines[index].includes('|') && isTableSeparator(lines[index + 1])
 }
@@ -195,7 +401,8 @@ function startsSpecialBlock(lines: string[], index: number) {
     isListItem(line) ||
     isHeadingLine(line) ||
     isHorizontalRuleLine(line) ||
-    isImageLine(line)
+    isImageLine(line) ||
+    rawHtmlBlockTagName(line) !== null
   )
 }
 
@@ -257,6 +464,22 @@ export function splitMarkdownBlocks(content: string): string[] {
       continue
     }
 
+    const rawHtmlTag = rawHtmlBlockTagName(line)
+    if (rawHtmlTag) {
+      flushParagraph()
+      const html = [line]
+      if (!closesRawHtmlBlock(line, rawHtmlTag)) {
+        index += 1
+        while (index < lines.length && !isBlankLine(lines[index])) {
+          html.push(lines[index])
+          if (closesRawHtmlBlock(lines[index], rawHtmlTag)) break
+          index += 1
+        }
+      }
+      blocks.push(html.join('\n'))
+      continue
+    }
+
     if (isListItem(line)) {
       flushParagraph()
       const ordered = isOrderedListItem(line)
@@ -297,6 +520,10 @@ function markdownBlockToHtmlWithHeadingId(block: string, headingId?: string): st
   if (code) {
     const language = code[1] ? ` class="language-${escapeAttribute(code[1])}"` : ''
     return `<pre><code${language}>${escapeHtml(code[2])}</code></pre>`
+  }
+
+  if (rawHtmlBlockTagName(trimmed)) {
+    return escapeTextAndSanitizeHtml(trimmed)
   }
 
   const image = parseMarkdownImageBlock(trimmed)

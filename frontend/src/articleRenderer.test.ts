@@ -93,3 +93,25 @@ assertIncludes(singleItemLists, '<ol><li>only step</li></ol>', 'single ordered l
 const tocWithoutBlankLines = extractArticleHeadings('## Intro\nBody\n### Details')
 assertIncludes(JSON.stringify(tocWithoutBlankLines), '"id":"intro"', 'toc sees heading before body without blank line')
 assertIncludes(JSON.stringify(tocWithoutBlankLines), '"id":"details"', 'toc sees heading after body without blank line')
+
+const inlineHtml = markdownToHtml('> `name` <span style="border: 2px solid black; padding: 1px;"><code>marked</code></span> `next`')
+assertIncludes(inlineHtml, '<blockquote>', 'inline html blockquote')
+assertIncludes(inlineHtml, '<span style="border: 2px solid black; padding: 1px"><code>marked</code></span>', 'safe inline html remains')
+
+const unsafeHtml = markdownToHtml('<script>alert(1)</script><span onclick="alert(1)" style="background-image: url(javascript:alert(1)); border: 1px solid red">ok</span><img src="javascript:alert(1)" onerror="alert(1)" alt="x">')
+assertNotIncludes(unsafeHtml, '<script', 'script tag blocked')
+assertNotIncludes(unsafeHtml, 'onclick', 'event attribute blocked')
+assertNotIncludes(unsafeHtml, 'background-image', 'unsafe style blocked')
+assertNotIncludes(unsafeHtml, 'javascript:alert', 'javascript url blocked')
+assertNotIncludes(unsafeHtml, 'onerror', 'image event attribute blocked')
+assertIncludes(unsafeHtml, '<span style="border: 1px solid red">ok</span>', 'safe style declaration remains')
+
+const rawHtmlMedia = markdownToHtml('<a href="https://example.com?a=1&b=2">site</a><br><img src="https://example.com/a.png" alt="A">')
+assertIncludes(rawHtmlMedia, '<a href="https://example.com?a=1&amp;b=2" target="_blank" rel="noopener noreferrer">site</a>', 'raw html link normalized')
+assertIncludes(rawHtmlMedia, '<br />', 'raw html br remains')
+assertIncludes(rawHtmlMedia, '<img src="https://example.com/a.png" alt="A" loading="lazy" />', 'raw html image normalized')
+
+const rawHtmlBlock = markdownToHtml('<div class="note" style="padding: 8px"><span>HTML</span></div>\n\nText')
+assertIncludes(rawHtmlBlock, '<div class="note" style="padding: 8px"><span>HTML</span></div>', 'raw html block remains unwrapped')
+assertNotIncludes(rawHtmlBlock, '<p><div', 'raw html block is not wrapped in paragraph')
+assertIncludes(rawHtmlBlock, '<p>Text</p>', 'markdown after raw html block renders')
